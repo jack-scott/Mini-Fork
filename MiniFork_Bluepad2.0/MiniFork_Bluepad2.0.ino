@@ -19,13 +19,15 @@ ControllerPtr myControllers[BP32_MAX_GAMEPADS];
 #define rightMotor0 33  // Used for controlling the right motor movementc:\Users\JohnC\Desktop\SOLIDWORKS Connected.lnk
 #define rightMotor1 32  // Used for controlling the right motor movement
 
+// #define cell_1 12
+#define cell_1_2 34
 
 #define FORWARD 1
 #define BACKWARD -1
 #define STOP 0
 
-Servo steeringServo;
-Servo mastTiltServo;
+Servo steeringServo;  //min 50 max 120 (30 range)
+Servo mastTiltServo;   //min 36 max 114 
 
 int servoDelay = 0;
 int lightSwitchTime = 0;
@@ -39,6 +41,9 @@ bool moveMastTiltServoDown = false;
 bool moveMastTiltServoUp = false;
 bool hardLeft;
 bool hardRight;
+bool enoughBattery = true;
+double lowBattRequired = 50;
+double lowBattCounts = 0;
 
 void onConnectedController(ControllerPtr ctl) {
   bool foundEmptySlot = false;
@@ -151,7 +156,19 @@ void processTrimLeft(int trimValue) {
 
 void processSteering(int axisRXValue) {
   adjustedSteeringValue = (90 - (axisRXValue / 9));
-  steeringServo.write(adjustedSteeringValue - steeringTrim);
+
+  float steeringRange = 30;
+  float steeringCenter = 90 - steeringTrim;
+  float maxSteering = steeringCenter + steeringRange;
+  float minSteering = steeringCenter - steeringRange;
+  float steeringOutput = adjustedSteeringValue - steeringTrim;
+
+  steeringOutput = min(steeringOutput, maxSteering);
+  steeringOutput = max(steeringOutput, minSteering);
+
+  if ( enoughBattery){
+    steeringServo.write(steeringOutput);
+  }
 
   if (adjustedSteeringValue > 100) {
     steeringAdjustment = ((200 - adjustedSteeringValue) / 100);
@@ -160,23 +177,67 @@ void processSteering(int axisRXValue) {
   }
 }
 
+void calcBattVoltage(void){
+  // float inputRaw = analogRead(cell_1_2);
+  float inputRaw  = 0;
+  for  (byte n = 0; n < 5; n++)
+  {
+    inputRaw += analogRead(cell_1_2);
+    delay (2);
+  }
+  inputRaw = inputRaw / 5;
+  float scaleFactor = 2.837/3.3;
+  float battFull = 8.4;
+  float battEmpty = 6.1;
+  // float battEmpty = 7.36;
+
+  float adcMax = 4095;
+  float adcScaled = adcMax * scaleFactor;
+  float battFullMapped = adcScaled; 
+  float battEmptyMapped = battEmpty/battFull * adcScaled;
+
+  float battVoltage =  min(inputRaw/adcScaled, float(1.0)) * battFull;
+  Serial.print("\nBatt voltage ");
+  Serial.print(battVoltage);
+  Serial.print("       RAW ");
+  Serial.print(inputRaw);
+  if (battVoltage <= battEmpty){
+    lowBattCounts ++;
+  }else{
+    lowBattCounts =0;
+  }
+
+  if(lowBattCounts > lowBattRequired){
+    enoughBattery = false;
+  }
+  Serial.print(" Enought batt  ");
+  Serial.print(enoughBattery);
+  Serial.print("   Low counts");
+  Serial.print(lowBattCounts);
+
+}
+
 void processMastTilt(int dpadValue) {
   if (dpadValue == 1) {
     if (servoDelay == 4) {
-      if (mastTiltValue >= 10 && mastTiltValue < 170) {
+      if (mastTiltValue >= 47 && mastTiltValue < 114) {
         //if using a ps3 controller that was flashed as an xbox360 controller change the value "1 " below to a "3" or "4" to make up for the slower movement.
         mastTiltValue = mastTiltValue + 1;
-        mastTiltServo.write(mastTiltValue);
+        if( enoughBattery){
+          mastTiltServo.write(mastTiltValue);
+        }
       }
       servoDelay = 0;
     }
     servoDelay++;
   } else if (dpadValue == 2) {
     if (servoDelay == 4) {
-      if (mastTiltValue <= 170 && mastTiltValue > 10) {
+      if (mastTiltValue <= 114 && mastTiltValue > 47) {
         //if using a ps3 controller that was flashed as an xbox360 controller change the value "1" below to a "3" or "4" to make up for the slower movement.
         mastTiltValue = mastTiltValue - 1;
-        mastTiltServo.write(mastTiltValue);
+        if (enoughBattery){
+          mastTiltServo.write(mastTiltValue);
+        }
       }
       servoDelay = 0;
     }
@@ -194,12 +255,15 @@ void processAux(bool buttonValue) {
       digitalWrite(auxAttach1, LOW);
       lightsOn = true;
     }
-
+    
     lightSwitchTime = millis();
   }
 }
 void moveMotor(int motorPin0, int motorPin1, int velocity) {
-  if (velocity > 1) {
+  if (! enoughBattery){
+    analogWrite(motorPin0, 0);
+    analogWrite(motorPin1, 0);
+  } else if (velocity > 1) {
     analogWrite(motorPin0, velocity);
     analogWrite(motorPin1, LOW);
   } else if (velocity < -1) {
@@ -224,10 +288,22 @@ void processControllers() {
 
 // Arduino setup function. Runs in CPU 1
 void setup() {
+  // analogReadResolution(12); //12 bits
+  // analogSetAttenuation(ADC_0db);  //For all pins
+  // analogSetPinAttenuation(A18, ADC_0db); //0db attenuation on pin A18
+  // analogSetPinAttenuation(A19, ADC_2_5db); //2.5db attenuation on pin A19
+  // analogSetPinAttenuation(A6, ADC_6db); //6db attenuation on pin A6
+  // analogSetPinAttenuation(A7, ADC_11db); //11db attenuation on pin A7
+ // Settings for ADC
+  // analogSetPinAttenuation(cell_1_2 , ADC_0db);
+
   pinMode(mastMotor0, OUTPUT);
   pinMode(mastMotor1, OUTPUT);
   pinMode(auxAttach0, OUTPUT);
   pinMode(auxAttach1, OUTPUT);
+  // pinMode(cell_1, INPUT);
+  pinMode(cell_1_2, INPUT);
+  // analogSetWidth(11);               // 11Bit resolution
   digitalWrite(auxAttach0, LOW);
   digitalWrite(auxAttach1, LOW);
   pinMode(leftMotor0, OUTPUT);
@@ -255,7 +331,7 @@ void setup() {
   // Calling "forgetBluetoothKeys" in setup() just as an example.
   // Forgetting Bluetooth keys prevents "paired" gamepads to reconnect.
   // But it might also fix some connection / re-connection issues.
-  BP32.forgetBluetoothKeys();
+  // BP32.forgetBluetoothKeys();
 
   // Enables mouse / touchpad support for gamepads that support them.
   // When enabled, controllers like DualSense and DualShock4 generate two connected devices:
@@ -281,6 +357,19 @@ void loop() {
   if (dataUpdated) {
     processControllers();
   }
+    else { vTaskDelay(1); }
+
+  // Serial.println("\nMast ");
+  // Serial.print(mastTiltValue);
+  // Serial.print("         Steering ");
+  // Serial.print(adjustedSteeringValue);
+
+  // float batt_val = analogRead(cell_1_2);
+
+  // Serial.print("         Batt ");
+  // Serial.print(batt_val);
+
+  calcBattVoltage();
   // The main loop must have some kind of "yield to lower priority task" event.
   // Otherwise, the watchdog will get triggered.
   // If your main loop doesn't have one, just add a simple `vTaskDelay(1)`.
@@ -288,5 +377,4 @@ void loop() {
   // https://stackoverflow.com/questions/66278271/task-watchdog-got-triggered-the-tasks-did-not-reset-the-watchdog-in-time
 
   //     vTaskDelay(1);
-  else { vTaskDelay(1); }
 }
